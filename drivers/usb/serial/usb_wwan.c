@@ -31,6 +31,7 @@
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
 #include <linux/serial.h>
+#include <linux/version.h>
 #include "usb-wwan.h"
 
 /*
@@ -132,6 +133,80 @@ int usb_wwan_tiocmset(struct tty_struct *tty,
 }
 EXPORT_SYMBOL(usb_wwan_tiocmset);
 
+static int get_serial_info(struct usb_serial_port *port,
+			   struct serial_struct __user *retinfo)
+{
+	struct serial_struct tmp;
+
+	memset(&tmp, 0, sizeof(tmp));
+	tmp.line            = port->minor;
+	tmp.port            = port->port_number;
+	tmp.baud_base       = tty_get_baud_rate(port->port.tty);
+	tmp.close_delay	    = port->port.close_delay / 10;
+	tmp.closing_wait    = port->port.closing_wait == ASYNC_CLOSING_WAIT_NONE ?
+				 ASYNC_CLOSING_WAIT_NONE :
+				 port->port.closing_wait / 10;
+
+	if (copy_to_user(retinfo, &tmp, sizeof(*retinfo)))
+		return -EFAULT;
+	return 0;
+}
+
+static int set_serial_info(struct usb_serial_port *port,
+			   struct serial_struct __user *newinfo)
+{
+	struct serial_struct new_serial;
+	unsigned int closing_wait, close_delay;
+	int retval = 0;
+
+	if (copy_from_user(&new_serial, newinfo, sizeof(new_serial)))
+		return -EFAULT;
+
+	close_delay = new_serial.close_delay * 10;
+	closing_wait = new_serial.closing_wait == ASYNC_CLOSING_WAIT_NONE ?
+			ASYNC_CLOSING_WAIT_NONE : new_serial.closing_wait * 10;
+
+	mutex_lock(&port->port.mutex);
+
+	if (!capable(CAP_SYS_ADMIN)) {
+		if ((close_delay != port->port.close_delay) ||
+		    (closing_wait != port->port.closing_wait))
+			retval = -EPERM;
+		else
+			retval = -EOPNOTSUPP;
+	} else {
+		port->port.close_delay  = close_delay;
+		port->port.closing_wait = closing_wait;
+	}
+
+	mutex_unlock(&port->port.mutex);
+	return retval;
+}
+
+int usb_wwan_ioctl(struct tty_struct *tty,
+		   unsigned int cmd, unsigned long arg)
+{
+	struct usb_serial_port *port = tty->driver_data;
+
+	dev_dbg(&port->dev, "%s cmd 0x%04x\n", __func__, cmd);
+
+	switch (cmd) {
+	case TIOCGSERIAL:
+		return get_serial_info(port,
+				       (struct serial_struct __user *) arg);
+	case TIOCSSERIAL:
+		return set_serial_info(port,
+				       (struct serial_struct __user *) arg);
+	default:
+		break;
+	}
+
+	dev_dbg(&port->dev, "%s arg not supported\n", __func__);
+
+	return -ENOIOCTLCMD;
+}
+EXPORT_SYMBOL(usb_wwan_ioctl);
+
 int usb_wwan_write(struct tty_struct *tty, struct usb_serial_port *port,
 		   const unsigned char *buf, int count)
 {
@@ -148,6 +223,7 @@ int usb_wwan_write(struct tty_struct *tty, struct usb_serial_port *port,
 
 	dev_dbg(&port->dev, "%s: write (%d chars)\n", __func__, count);
 
+	i = 0;
 	left = count;
 	for (i = 0; left > 0 && i < N_OUT_URB; i++) {
 		todo = left;
@@ -224,10 +300,6 @@ static void usb_wwan_indat_callback(struct urb *urb)
 	if (status) {
 		dev_dbg(dev, "%s: nonzero status: %d on endpoint %02x.\n",
 			__func__, status, endpoint);
-
-		/* don't resubmit on fatal errors */
-		if (status == -ESHUTDOWN || status == -ENOENT)
-			return;
 	} else {
 		if (urb->actual_length) {
 			tty_insert_flip_string(&port->port, data,
@@ -294,16 +366,17 @@ unsigned int usb_wwan_write_room(struct tty_struct *tty)
 	}
 
 	dev_dbg(&port->dev, "%s: %u\n", __func__, data_len);
+
 	return data_len;
 }
 EXPORT_SYMBOL(usb_wwan_write_room);
 
-unsigned int usb_wwan_chars_in_buffer(struct tty_struct *tty)
+unsigned int usb_wwan_chars_in_buffer(struct tty_struct* tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
 	struct usb_wwan_port_private *portdata;
 	int i;
-	unsigned int data_len = 0;
+	int data_len = 0;
 	struct urb *this_urb;
 
 	portdata = usb_get_serial_port_data(port);
@@ -315,7 +388,8 @@ unsigned int usb_wwan_chars_in_buffer(struct tty_struct *tty)
 		if (this_urb && test_bit(i, &portdata->out_busy))
 			data_len += this_urb->transfer_buffer_length;
 	}
-	dev_dbg(&port->dev, "%s: %u\n", __func__, data_len);
+	dev_dbg(&port->dev, "%s: %d\n", __func__, data_len);
+
 	return data_len;
 }
 EXPORT_SYMBOL(usb_wwan_chars_in_buffer);
@@ -498,7 +572,7 @@ bail_out_error:
 }
 EXPORT_SYMBOL_GPL(usb_wwan_port_probe);
 
-void usb_wwan_port_remove(struct usb_serial_port *port)
+void usb_wwan_port_remove(struct usb_serial_port* port)
 {
 	int i;
 	struct usb_wwan_port_private *portdata;
@@ -516,6 +590,7 @@ void usb_wwan_port_remove(struct usb_serial_port *port)
 	}
 
 	kfree(portdata);
+
 }
 EXPORT_SYMBOL(usb_wwan_port_remove);
 
@@ -610,7 +685,6 @@ int usb_wwan_resume(struct usb_serial *serial)
 
 		if (!tty_port_initialized(&port->port))
 			continue;
-
 		portdata = usb_get_serial_port_data(port);
 
 		if (port->interrupt_in_urb) {
@@ -653,3 +727,4 @@ EXPORT_SYMBOL(usb_wwan_resume);
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL v2");
+MODULE_VERSION("1.1.2203.1");
