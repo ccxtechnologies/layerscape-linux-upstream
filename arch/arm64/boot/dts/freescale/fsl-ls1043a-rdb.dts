@@ -38,6 +38,10 @@
 		compatible = "adi,adt7461";
 		reg = <0x4c>;
 	};
+	rtc@51 {
+		compatible = "nxp,pcf85263";
+		reg = <0x51>;
+	};
 	eeprom@52 {
 		compatible = "atmel,24c512";
 		reg = <0x52>;
@@ -94,8 +98,6 @@
 		compatible = "n25q128a13", "jedec,spi-nor";  /* 16MB */
 		reg = <0>;
 		spi-max-frequency = <1000000>; /* input clock */
-		fsl,spi-cs-sck-delay = <100>;
-		fsl,spi-sck-cs-delay = <100>;
 	};
 
 	slic@2 {
