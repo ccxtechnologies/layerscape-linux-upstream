@@ -19,6 +19,9 @@ gianfar_driver-objs := gianfar.o \
 obj-$(CONFIG_UCC_GETH) += ucc_geth_driver.o
 ucc_geth_driver-objs := ucc_geth.o ucc_geth_ethtool.o
 
+obj-$(CONFIG_FSL_SDK_FMAN) += sdk_fman/
+obj-$(CONFIG_FSL_SDK_DPAA_ETH) += sdk_dpaa/
+
 obj-$(CONFIG_FSL_FMAN) += fman/
 obj-$(CONFIG_FSL_DPAA_ETH) += dpaa/
 

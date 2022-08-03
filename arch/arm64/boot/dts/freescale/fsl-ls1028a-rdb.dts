@@ -2,7 +2,7 @@
 /*
  * Device Tree file for NXP LS1028A RDB Board.
  *
- * Copyright 2018-2021 NXP
+ * Copyright 2018 NXP
  *
  * Harninder Rai <harninder.rai@nxp.com>
  *
@@ -22,13 +22,6 @@
 		mmc0 = &esdhc;
 		mmc1 = &esdhc1;
 		rtc1 = &ftm_alarm1;
-		spi0 = &fspi;
-		ethernet0 = &enetc_port0;
-		ethernet1 = &enetc_port2;
-		ethernet2 = &mscc_felix_port0;
-		ethernet3 = &mscc_felix_port1;
-		ethernet4 = &mscc_felix_port2;
-		ethernet5 = &mscc_felix_port3;
 	};
 
 	chosen {
@@ -118,10 +111,6 @@
 };
 
 &enetc_mdio_pf3 {
-	sgmii_phy0: ethernet-phy@2 {
-		reg = <0x2>;
-	};
-
 	/* VSC8514 QSGMII quad PHY */
 	qsgmii_phy0: ethernet-phy@10 {
 		reg = <0x10>;
@@ -142,9 +131,17 @@
 
 &enetc_port0 {
 	phy-handle = <&sgmii_phy0>;
-	phy-mode = "sgmii";
+	phy-connection-type = "sgmii";
 	managed = "in-band-status";
 	status = "okay";
+
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		sgmii_phy0: ethernet-phy@2 {
+			reg = <0x2>;
+		};
+	};
 };
 
 &enetc_port2 {
@@ -182,6 +179,11 @@
 };
 
 &ftm_alarm1 {
+	status = "okay";
+};
+
+&hdptx0 {
+	lane_mapping = <0x4e>;
 	status = "okay";
 };
 
@@ -298,11 +300,6 @@
 	status = "okay";
 };
 
-&usb0 {
-	status = "okay";
-};
-
 &usb1 {
 	dr_mode = "otg";
-	status = "okay";
 };
