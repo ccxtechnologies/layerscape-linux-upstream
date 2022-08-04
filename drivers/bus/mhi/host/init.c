@@ -18,6 +18,7 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
+#include <linux/irq.h>
 #include "internal.h"
 
 static DEFINE_IDA(mhi_controller_ida);
@@ -154,6 +155,22 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 	unsigned long irq_flags = IRQF_SHARED | IRQF_NO_SUSPEND;
 	int i, ret;
 
+	/*
+	 * if irq[0] has action, it represents all MSI IRQs have been
+	 * requested, so we just need to enable them.
+	 */
+	if (irq_has_action(mhi_cntrl->irq[0])) {
+		enable_irq(mhi_cntrl->irq[0]);
+
+		for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++) {
+			if (mhi_event->offload_ev)
+				continue;
+
+			enable_irq(mhi_cntrl->irq[mhi_event->irq]);
+		}
+		return 0;
+	}
+
 	/* if controller driver has set irq_flags, use it */
 	if (mhi_cntrl->irq_flags)
 		irq_flags = mhi_cntrl->irq_flags;
@@ -165,6 +182,11 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 				   "bhi", mhi_cntrl);
 	if (ret)
 		return ret;
+	/*
+	 * IRQ marked IRQF_SHARED isn't recommended to use IRQ_NOAUTOEN,
+	 * so disable it explicitly.
+	 */
+	disable_irq(mhi_cntrl->irq[0]);
 
 	for (i = 0; i < mhi_cntrl->total_ev_rings; i++, mhi_event++) {
 		if (mhi_event->offload_ev)
@@ -186,6 +208,8 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 				mhi_cntrl->irq[mhi_event->irq], i);
 			goto error_request;
 		}
+
+		disable_irq(mhi_cntrl->irq[mhi_event->irq]);
 	}
 
 	return 0;
@@ -984,8 +1008,14 @@ int mhi_register_controller(struct mhi_controller *mhi_cntrl,
 
 	mhi_create_debugfs(mhi_cntrl);
 
+	ret = mhi_init_irq_setup(mhi_cntrl);
+	if (ret)
+		goto error_setup_irq;
+
 	return 0;
 
+error_setup_irq:
+	mhi_destroy_debugfs(mhi_cntrl);
 err_release_dev:
 	put_device(&mhi_dev->dev);
 err_ida_free:
@@ -1008,6 +1038,7 @@ void mhi_unregister_controller(struct mhi_controller *mhi_cntrl)
 	struct mhi_chan *mhi_chan = mhi_cntrl->mhi_chan;
 	unsigned int i;
 
+	mhi_deinit_free_irq(mhi_cntrl);
 	mhi_destroy_debugfs(mhi_cntrl);
 
 	destroy_workqueue(mhi_cntrl->hiprio_wq);
