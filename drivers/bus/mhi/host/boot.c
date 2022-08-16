@@ -16,7 +16,10 @@
 #include <linux/random.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
+#include <linux/pci.h>
 #include "internal.h"
+
+#define QRTR_INSTANCE_MASK	0x000000FF
 
 /* Setup RDDM vector table for RDDM transfer and program RXVEC */
 void mhi_rddm_prepare(struct mhi_controller *mhi_cntrl,
@@ -383,6 +386,9 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 {
 	const struct firmware *firmware = NULL;
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
+	struct pci_dev *pci_dev = to_pci_dev(mhi_cntrl->cntrl_dev);
+	struct pci_bus *bus = pci_dev->bus;
+	uint32_t instance;
 	const char *fw_name;
 	void *buf;
 	dma_addr_t dma_addr;
@@ -459,6 +465,12 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 		release_firmware(firmware);
 		goto fw_load_ready_state;
 	}
+
+	instance = ((pci_domain_nr(bus) & 0xF) << 4) | (bus->number & 0xF);
+	instance &= QRTR_INSTANCE_MASK;
+	mhi_write_reg_field(mhi_cntrl, mhi_cntrl->bhi,
+					BHI_ERRDBG2, QRTR_INSTANCE_MASK, instance);
+
 
 	write_lock_irq(&mhi_cntrl->pm_lock);
 	mhi_cntrl->dev_state = MHI_STATE_RESET;
