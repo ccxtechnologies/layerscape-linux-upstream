@@ -685,18 +685,31 @@ static int ath11k_core_fetch_board_data_api_n(struct ath11k_base *ab,
 {
 	size_t len, magic_len;
 	const u8 *data;
-	char *filename, filepath[100];
+	char *filename, filepath[100], unq_filename[ATH11K_QMI_MAX_BDF_FILE_NAME_SIZE+2];
 	size_t ie_len;
 	struct ath11k_fw_ie *hdr;
+	struct device *dev = ab->dev;
 	int ret, ie_id;
 
-	filename = ATH11K_BOARD_API2_FILE;
-
+	/* board-<bus>-<id>.bin */
+	snprintf(unq_filename, sizeof(unq_filename), "board-%s-%s.bin",
+				ath11k_bus_str(ab->hif.bus), dev_name(dev));
 	if (!bd->fw)
-		bd->fw = ath11k_core_firmware_request(ab, filename);
+		bd->fw = ath11k_core_firmware_request(ab, unq_filename);
 
-	if (IS_ERR(bd->fw))
-		return PTR_ERR(bd->fw);
+	if (IS_ERR(bd->fw)) {
+		filename = ATH11K_BOARD_API2_FILE;
+
+		if (!bd->fw)
+			bd->fw = ath11k_core_firmware_request(ab, filename);
+
+		if (IS_ERR(bd->fw))
+			return PTR_ERR(bd->fw);
+
+		ath11k_info(ab, "Loaded board file: %s\n", filename);
+	} else {
+		ath11k_info(ab, "Loaded board file: %s\n", unq_filename);
+	}
 
 	data = bd->fw->data;
 	len = bd->fw->size;
