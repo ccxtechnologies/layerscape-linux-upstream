@@ -822,6 +822,8 @@ struct ath11k_base {
 		u32 subsystem_device;
 	} id;
 
+	u32 node_id;
+
 	/* must be last */
 	u8 drv_priv[] __aligned(sizeof(void *));
 };
