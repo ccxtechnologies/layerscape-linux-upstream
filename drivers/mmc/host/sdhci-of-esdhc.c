@@ -950,10 +950,12 @@ static int esdhc_signal_voltage_switch(struct mmc_host *mmc,
 
 	switch (ios->signal_voltage) {
 	case MMC_SIGNAL_VOLTAGE_330:
+		pr_info("%s: Updating bus voltage to 3.3V\n", mmc_hostname(mmc));
 		val &= ~ESDHC_VOLT_SEL;
 		sdhci_writel(host, val, ESDHC_PROCTL);
 		return 0;
 	case MMC_SIGNAL_VOLTAGE_180:
+		pr_info("%s: Updating bus voltage to 1.8V\n", mmc_hostname(mmc));
 		scfg_node = of_find_matching_node(NULL, scfg_device_ids);
 		if (scfg_node)
 			scfg_base = of_iomap(scfg_node, 0);
