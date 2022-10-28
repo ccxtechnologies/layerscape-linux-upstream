@@ -24,6 +24,7 @@
 #include <linux/clk-provider.h>
 #include <linux/regmap.h>
 #include <linux/watchdog.h>
+#include <linux/panic_notifier.h>
 
 /*
  * We can't determine type by probing, but if we expect pre-Linux code
@@ -275,6 +276,21 @@ static struct attribute *ds1340_sysfs_entries[] = {
 static struct attribute_group ds1340_attribute_group = {
 	.name = "configuration",
 	.attrs = ds1340_sysfs_entries,
+};
+
+static struct ds1307 *panic_device = NULL;
+
+static int fout_on_panic(struct notifier_block *nb, unsigned long e, void *p)
+{
+	if (panic_device != NULL) {
+		regmap_write(panic_device->regmap, DS1340_REG_CONTROL, DS1340_BIT_OUT);
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block ds1340_panic_nb = {
+			.notifier_call = fout_on_panic,
 };
 
 static const struct chip_desc chips[last_ds_type];
@@ -2097,6 +2113,12 @@ static int ds1307_probe(struct i2c_client *client,
 		if (err) {
 			dev_err(ds1307->dev, "failed to create ds1340 sysfs interface: %d\n", err);
 			return err;
+		}
+
+		if (panic_device == NULL) {
+			dev_err(ds1307->dev, "Adding panic device\n");
+			panic_device = ds1307;
+			atomic_notifier_chain_register(&panic_notifier_list, &ds1340_panic_nb);
 		}
 	}
 
