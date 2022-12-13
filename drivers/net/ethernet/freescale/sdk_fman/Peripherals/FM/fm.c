@@ -3472,6 +3472,11 @@ t_Handle FM_Config(t_FmParams *p_FmParam)
    return p_Fm;
 }
 
+void FM_ErrorIsr_(t_Handle h_Fm)
+{
+		FM_ErrorIsr(h_Fm);
+}
+
 /**************************************************************************//**
  @Function      FM_Init
 
@@ -3688,7 +3693,7 @@ t_Error FM_Init(t_Handle h_Fm)
 
     if (p_Fm->p_FmStateStruct->errIrq != NO_IRQ)
     {
-        XX_SetIntr(p_Fm->p_FmStateStruct->errIrq, (void (*) (t_Handle))FM_ErrorIsr, p_Fm);
+        XX_SetIntr(p_Fm->p_FmStateStruct->errIrq, FM_ErrorIsr_, p_Fm);
         XX_EnableIntr(p_Fm->p_FmStateStruct->errIrq);
     }
 
