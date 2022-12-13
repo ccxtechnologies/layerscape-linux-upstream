@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2015-2016 Freescale Semiconductor, Inc.
- * Copyright 2017-2018 NXP
+ * Copyright 2017 NXP
  */
 
 #include "pfe_mod.h"
@@ -545,7 +545,7 @@ static int pe_load_ddr_section(int id, const void *data,
 			if (id <= CLASS_MAX_ID) {
 				/* DO the loading only once in DDR */
 				if (id == CLASS0_ID) {
-					pr_err(
+					pr_notice(
 						"%s: load address(%x) and elf file address(%lx) rcvd\n",
 						__func__, addr,
 						(unsigned long)data + offset);

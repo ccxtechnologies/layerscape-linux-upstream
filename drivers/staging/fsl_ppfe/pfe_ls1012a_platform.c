@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2015-2016 Freescale Semiconductor, Inc.
- * Copyright 2017-2018 NXP
+ * Copyright 2017 NXP
  */
 
 #include <linux/module.h>
@@ -26,16 +26,25 @@ static int pfe_get_gemac_if_properties(struct device_node *gem,
 				       struct ls1012a_pfe_platform_data	*pdata)
 {
 	struct device_node *phy_node = NULL;
-	int size, ret;
+	int size;
 	int phy_id = 0;
 	const u32 *addr;
+	const u8 *mac_addr;
+	int err;
 
 	addr = of_get_property(gem, "reg", &size);
-	port = be32_to_cpup(addr);
+	if (addr)
+		port = be32_to_cpup(addr);
+	else
+		goto err;
 
 	pdata->ls1012a_eth_pdata[port].gem_id = port;
 
-	of_get_mac_address(gem, pdata->ls1012a_eth_pdata[port].mac_addr);
+	mac_addr = of_get_mac_address(gem);
+	if (!IS_ERR_OR_NULL(mac_addr)) {
+		memcpy(pdata->ls1012a_eth_pdata[port].mac_addr, mac_addr,
+		       ETH_ALEN);
+	}
 
 	phy_node = of_parse_phandle(gem, "phy-handle", 0);
 	pdata->ls1012a_eth_pdata[port].phy_node = phy_node;
@@ -76,8 +85,8 @@ static int pfe_get_gemac_if_properties(struct device_node *gem,
 	}
 
 process_phynode:
-	ret = of_get_phy_mode(gem, &pdata->ls1012a_eth_pdata[port].mii_config);
-	if (ret < 0)
+	err = of_get_phy_mode(gem, &pdata->ls1012a_eth_pdata[port].mii_config);
+	if (err)
 		pr_err("%s:%d Incorrect Phy mode....\n", __func__,
 		       __LINE__);
 
@@ -112,7 +121,7 @@ err:
 static int pfe_platform_probe(struct platform_device *pdev)
 {
 	struct resource res;
-	int ii, rc, interface_count = 0, size = 0;
+	int ii = 0, rc, interface_count = 0, size = 0;
 	const u32 *prop;
 	struct device_node *np, *gem = NULL;
 	struct clk *pfe_clk;
@@ -132,7 +141,11 @@ static int pfe_platform_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, pfe);
 
-	dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32))) {
+		rc = -ENOMEM;
+		pr_err("unable to configure DMA mask.\n");
+		goto err_ddr;
+	}
 
 	if (of_address_to_resource(np, 1, &res)) {
 		rc = -ENOMEM;
@@ -143,9 +156,10 @@ static int pfe_platform_probe(struct platform_device *pdev)
 	pfe->ddr_phys_baseaddr = res.start;
 	pfe->ddr_size = resource_size(&res);
 
-	pfe->ddr_baseaddr = phys_to_virt(res.start);
+	pfe->ddr_baseaddr = memremap(res.start, resource_size(&res),
+				     MEMREMAP_WB);
 	if (!pfe->ddr_baseaddr) {
-		pr_err("ioremap() ddr failed\n");
+		pr_err("memremap() ddr failed\n");
 		rc = -ENOMEM;
 		goto err_ddr;
 	}
@@ -197,15 +211,16 @@ static int pfe_platform_probe(struct platform_device *pdev)
 
 	pfe_platform_data.ls1012a_mdio_pdata[0].phy_mask = 0xffffffff;
 
-	for (ii = 0; ii < interface_count; ii++) {
-		gem = of_get_next_child(np, gem);
-		if (gem)
+	while ((gem = of_get_next_child(np, gem))) {
+		if (of_find_property(gem, "reg", &size)) {
 			pfe_get_gemac_if_properties(gem, ii,
-						    &pfe_platform_data);
-		else
-			pr_err("Unable to find interface %d\n", ii);
-
+						&pfe_platform_data);
+			ii++;
+		}
 	}
+
+	if (interface_count != ii)
+		pr_info("missing some of gemac interface properties.\n");
 
 	pfe->dev = &pdev->dev;
 
@@ -235,7 +250,7 @@ err_hif_irq:
 	iounmap(pfe->cbus_baseaddr);
 
 err_axi:
-	iounmap(pfe->ddr_baseaddr);
+	memunmap(pfe->ddr_baseaddr);
 
 err_ddr:
 	platform_set_drvdata(pdev, NULL);
@@ -259,7 +274,8 @@ static int pfe_platform_remove(struct platform_device *pdev)
 	rc = pfe_remove(pfe);
 
 	iounmap(pfe->cbus_baseaddr);
-	iounmap(pfe->ddr_baseaddr);
+
+	memunmap(pfe->ddr_baseaddr);
 
 	platform_set_drvdata(pdev, NULL);
 

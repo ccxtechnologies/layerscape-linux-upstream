@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright 2015-2016 Freescale Semiconductor, Inc.
- * Copyright 2017-2018 NXP
+ * Copyright 2017 NXP
  */
 
 #ifndef _PFE_ETH_H_
@@ -38,7 +38,7 @@
 
 struct ls1012a_eth_platform_data {
 	/* board specific information */
-	u32 mii_config;
+	phy_interface_t mii_config;
 	u32 phy_flags;
 	u32 gem_id;
 	u32 phy_id;

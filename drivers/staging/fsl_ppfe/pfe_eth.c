@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2015-2016 Freescale Semiconductor, Inc.
- * Copyright 2017-2018 NXP
+ * Copyright 2017 NXP
  */
 
 /* @pfe_eth.c.
@@ -35,7 +35,7 @@
 #include <linux/delay.h>
 #include <linux/regmap.h>
 #include <linux/i2c.h>
-#include <linux/fsl/guts.h>
+#include <linux/sys_soc.h>
 
 #if defined(CONFIG_NF_CONNTRACK_MARK)
 #include <net/netfilter/nf_conntrack.h>
@@ -102,6 +102,14 @@ unsigned int gemac_regs[] = {
 	0x0190, /* Receive FIFO Section Full Threshold */
 	0x01A0, /* Transmit FIFO Section Empty Threshold */
 	0x01B0, /* Frame Truncation Length */
+};
+
+const struct soc_device_attribute ls1012a_rev1_soc_attr[] = {
+	{ .family = "QorIQ LS1012A",
+	  .soc_id = "svr:0x87040010",
+	  .revision = "1.0",
+	  .data = NULL },
+	{ },
 };
 
 /********************************************************************/
@@ -468,9 +476,20 @@ static void pfe_eth_fill_stats(struct net_device *ndev, struct ethtool_stats
 {
 	struct pfe_eth_priv_s *priv = netdev_priv(ndev);
 	int i;
+	u64 pfe_crc_validated = 0;
+	int id;
 
-	for (i = 0; i < ARRAY_SIZE(fec_stats); i++)
+	for (id = CLASS0_ID; id <= CLASS_MAX_ID; id++) {
+		pfe_crc_validated += be32_to_cpu(pe_dmem_read(id,
+			CLASS_DM_CRC_VALIDATED + (priv->id * 4), 4));
+	}
+
+	for (i = 0; i < ARRAY_SIZE(fec_stats); i++) {
 		data[i] = readl(priv->EMAC_baseaddr + fec_stats[i].offset);
+
+		if (fec_stats[i].offset == IEEE_R_DROP)
+			data[i] -= pfe_crc_validated;
+	}
 }
 
 static void pfe_eth_gstrings(struct net_device *netdev,
@@ -642,9 +661,7 @@ static void pfe_eth_set_msglevel(struct net_device *ndev, uint32_t data)
  *
  */
 static int pfe_eth_set_coalesce(struct net_device *ndev,
-				struct ethtool_coalesce *ec,
-				struct kernel_ethtool_coalesce *kc,
-				struct netlink_ext_ack *extack)
+				struct ethtool_coalesce *ec)
 {
 	if (ec->rx_coalesce_usecs > HIF_RX_COAL_MAX_USECS)
 		return -EINVAL;
@@ -665,9 +682,7 @@ static int pfe_eth_set_coalesce(struct net_device *ndev,
  *
  */
 static int pfe_eth_get_coalesce(struct net_device *ndev,
-				struct ethtool_coalesce *ec,
-				struct kernel_ethtool_coalesce *kc,
-				struct netlink_ext_ack *extack)
+				struct ethtool_coalesce *ec)
 {
 	int reg_val = readl(HIF_INT_COAL);
 
@@ -705,7 +720,14 @@ static int pfe_eth_set_pauseparam(struct net_device *ndev,
 					EGPI_PAUSE_ENABLE),
 				priv->GPI_baseaddr + GPI_TX_PAUSE_TIME);
 		if (priv->phydev) {
-			phy_support_asym_pause(priv->phydev);
+			linkmode_set_bit(ETHTOOL_LINK_MODE_Pause_BIT,
+					 priv->phydev->supported);
+			linkmode_set_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT,
+					 priv->phydev->supported);
+			linkmode_set_bit(ETHTOOL_LINK_MODE_Pause_BIT,
+					 priv->phydev->advertising);
+			linkmode_set_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT,
+					 priv->phydev->advertising);
 		}
 	} else {
 		gemac_disable_pause_rx(priv->EMAC_baseaddr);
@@ -713,7 +735,14 @@ static int pfe_eth_set_pauseparam(struct net_device *ndev,
 					~EGPI_PAUSE_ENABLE),
 				priv->GPI_baseaddr + GPI_TX_PAUSE_TIME);
 		if (priv->phydev) {
-			phy_support_sym_pause(priv->phydev);
+			linkmode_clear_bit(ETHTOOL_LINK_MODE_Pause_BIT,
+					   priv->phydev->supported);
+			linkmode_clear_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT,
+					   priv->phydev->supported);
+			linkmode_clear_bit(ETHTOOL_LINK_MODE_Pause_BIT,
+					   priv->phydev->advertising);
+			linkmode_clear_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT,
+					   priv->phydev->advertising);
 		}
 	}
 
@@ -765,6 +794,7 @@ static int pfe_eth_get_hash(u8 *addr)
 }
 
 const struct ethtool_ops pfe_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
 	.get_drvinfo = pfe_eth_get_drvinfo,
 	.get_regs_len = pfe_eth_gemac_reglen,
 	.get_regs = pfe_eth_gemac_get_regs,
@@ -971,12 +1001,11 @@ static int pfe_eth_mdio_init(struct pfe *pfe,
 	priv->mdio_base = cbus_emac_base[ii];
 
 	priv->mdc_div = mdio_info->mdc_div;
-	if (!priv->mdc_div) {
+	if (!priv->mdc_div)
 		priv->mdc_div = 64;
-		dev_info(bus->parent, "%s: mdc_div: %d, phy_mask: %x\n",
-			 __func__, priv->mdc_div, bus->phy_mask);
-	}
 
+	dev_info(bus->parent, "%s: mdc_div: %d, phy_mask: %x\n",
+		 __func__, priv->mdc_div, bus->phy_mask);
 	mdio_node = of_get_child_by_name(pfe->dev->of_node, "mdio");
 	if ((mdio_info->id == 0) && mdio_node) {
 		rc = of_mdiobus_register(bus, mdio_node);
@@ -1107,7 +1136,7 @@ static void pfe_eth_adjust_link(struct net_device *ndev)
 			gemac_set_speed(priv->EMAC_baseaddr,
 					pfe_get_phydev_speed(phydev));
 			if (priv->einfo->mii_config ==
-					PHY_INTERFACE_MODE_RGMII_TXID)
+					PHY_INTERFACE_MODE_RGMII_ID)
 				pfe_set_rgmii_speed(phydev);
 			priv->oldspeed = phydev->speed;
 		}
@@ -1196,8 +1225,12 @@ static void ls1012a_configure_serdes(struct net_device *ndev)
 {
 	struct pfe_eth_priv_s *eth_priv = netdev_priv(ndev);
 	struct pfe_mdio_priv_s *mdio_priv = pfe->mdio.mdio_priv[eth_priv->id];
+	int sgmii_2500 = 0;
 	struct mii_bus *bus = mdio_priv->mii_bus;
 	u16 value = 0;
+
+	if (eth_priv->einfo->mii_config == PHY_INTERFACE_MODE_2500SGMII)
+		sgmii_2500 = 1;
 
 	netif_info(eth_priv, drv, ndev, "%s\n", __func__);
 	/* PCS configuration done with corresponding GEMAC */
@@ -1207,18 +1240,30 @@ static void ls1012a_configure_serdes(struct net_device *ndev)
 
 	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, SGMII_CR_RST);
 
-	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_IF_MODE,
+	if (sgmii_2500) {
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_IF_MODE, SGMII_SPEED_1GBPS
+							       | SGMII_EN);
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_DEV_ABIL_SGMII,
+				   SGMII_DEV_ABIL_ACK | SGMII_DEV_ABIL_SGMII);
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_L, 0xa120);
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_H, 0x7);
+		/* Autonegotiation need to be disabled for 2.5G SGMII mode*/
+		value = SGMII_CR_FD | SGMII_CR_SPEED_SEL1_1G;
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, value);
+	} else {
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_IF_MODE,
 				   SGMII_SPEED_1GBPS
 				   | SGMII_USE_SGMII_AN
 				   | SGMII_EN);
-	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_DEV_ABIL_SGMII,
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_DEV_ABIL_SGMII,
 				   SGMII_DEV_ABIL_EEE_CLK_STP_EN
 				   | 0xa0
 				   | SGMII_DEV_ABIL_SGMII);
-	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_L, 0x400);
-	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_H, 0x0);
-	value = SGMII_CR_AN_EN | SGMII_CR_FD | SGMII_CR_SPEED_SEL1_1G;
-	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, value);
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_L, 0x400);
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_H, 0x0);
+		value = SGMII_CR_AN_EN | SGMII_CR_FD | SGMII_CR_SPEED_SEL1_1G;
+		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, value);
+	}
 }
 
 /*
@@ -1242,7 +1287,8 @@ static int pfe_phy_init(struct net_device *ndev)
 		 priv->einfo->phy_id);
 	netif_info(priv, drv, ndev, "%s: %s\n", __func__, phy_id);
 	interface = priv->einfo->mii_config;
-	if (interface == PHY_INTERFACE_MODE_SGMII) {
+	if ((interface == PHY_INTERFACE_MODE_SGMII) ||
+	    (interface == PHY_INTERFACE_MODE_2500SGMII)) {
 		/*Configure SGMII PCS */
 		if (pfe->scfg) {
 			/* Config MDIO from serdes */
@@ -1293,6 +1339,7 @@ static int pfe_gemac_init(struct pfe_eth_priv_s *priv)
 
 	netif_info(priv, ifup, priv->ndev, "%s\n", __func__);
 
+	cfg.mode = 0;
 	cfg.speed = SPEED_1000M;
 	cfg.duplex = DUPLEX_FULL;
 
@@ -1449,7 +1496,7 @@ err0:
 int pfe_eth_shutdown(struct net_device *ndev, int wake)
 {
 	struct pfe_eth_priv_s *priv = netdev_priv(ndev);
-	int i, qstatus;
+	int i, qstatus, id;
 	unsigned long next_poll = jiffies + 1, end = jiffies +
 				(TX_POLL_TIMEOUT_MS * HZ) / 1000;
 	int tx_pkts, prv_tx_pkts;
@@ -1529,6 +1576,11 @@ int pfe_eth_shutdown(struct net_device *ndev, int wake)
 	napi_disable(&priv->lro_napi);
 	napi_disable(&priv->low_napi);
 	napi_disable(&priv->high_napi);
+
+	for (id = CLASS0_ID; id <= CLASS_MAX_ID; id++) {
+		pe_dmem_write(id, 0, CLASS_DM_CRC_VALIDATED
+			      + (priv->id * 4), 4);
+	}
 
 	hif_lib_client_unregister(&priv->client);
 
@@ -1875,7 +1927,7 @@ static int pfe_eth_set_mac_address(struct net_device *ndev, void *addr)
 	if (!is_valid_ether_addr(sa->sa_data))
 		return -EADDRNOTAVAIL;
 
-	eth_hw_addr_set(ndev, sa->sa_data);
+	memcpy(ndev->dev_addr, sa->sa_data, ETH_ALEN);
 
 	gemac_set_laddrN(priv->EMAC_baseaddr,
 			 (struct pfe_mac_addr *)ndev->dev_addr, 1);
@@ -2342,7 +2394,7 @@ static int pfe_eth_init_one(struct pfe *pfe,
 	pfe_eth_fast_tx_timeout_init(priv);
 
 	/* Copy the station address into the dev structure, */
-	eth_hw_addr_set(ndev, einfo[id].mac_addr);
+	memcpy(ndev->dev_addr, einfo[id].mac_addr, ETH_ALEN);
 
 	if (us)
 		goto phy_init;
@@ -2470,7 +2522,7 @@ int pfe_eth_init(struct pfe *pfe)
 		}
 	}
 
-	if (fsl_guts_get_svr() == LS1012A_REV_1_0)
+	if (soc_device_match(ls1012a_rev1_soc_attr))
 		pfe_errata_a010897 = true;
 	else
 		pfe_errata_a010897 = false;
