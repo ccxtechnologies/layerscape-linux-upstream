@@ -642,7 +642,9 @@ static void pfe_eth_set_msglevel(struct net_device *ndev, uint32_t data)
  *
  */
 static int pfe_eth_set_coalesce(struct net_device *ndev,
-				struct ethtool_coalesce *ec)
+				struct ethtool_coalesce *ec,
+				struct kernel_ethtool_coalesce *kc,
+				struct netlink_ext_ack *extack)
 {
 	if (ec->rx_coalesce_usecs > HIF_RX_COAL_MAX_USECS)
 		return -EINVAL;
@@ -663,7 +665,9 @@ static int pfe_eth_set_coalesce(struct net_device *ndev,
  *
  */
 static int pfe_eth_get_coalesce(struct net_device *ndev,
-				struct ethtool_coalesce *ec)
+				struct ethtool_coalesce *ec,
+				struct kernel_ethtool_coalesce *kc,
+				struct netlink_ext_ack *extack)
 {
 	int reg_val = readl(HIF_INT_COAL);
 
@@ -701,10 +705,7 @@ static int pfe_eth_set_pauseparam(struct net_device *ndev,
 					EGPI_PAUSE_ENABLE),
 				priv->GPI_baseaddr + GPI_TX_PAUSE_TIME);
 		if (priv->phydev) {
-			priv->phydev->supported |= ADVERTISED_Pause |
-							ADVERTISED_Asym_Pause;
-			priv->phydev->advertising |= ADVERTISED_Pause |
-							ADVERTISED_Asym_Pause;
+			phy_support_asym_pause(priv->phydev);
 		}
 	} else {
 		gemac_disable_pause_rx(priv->EMAC_baseaddr);
@@ -712,10 +713,7 @@ static int pfe_eth_set_pauseparam(struct net_device *ndev,
 					~EGPI_PAUSE_ENABLE),
 				priv->GPI_baseaddr + GPI_TX_PAUSE_TIME);
 		if (priv->phydev) {
-			priv->phydev->supported &= ~(ADVERTISED_Pause |
-							ADVERTISED_Asym_Pause);
-			priv->phydev->advertising &= ~(ADVERTISED_Pause |
-							ADVERTISED_Asym_Pause);
+			phy_support_sym_pause(priv->phydev);
 		}
 	}
 
@@ -973,10 +971,11 @@ static int pfe_eth_mdio_init(struct pfe *pfe,
 	priv->mdio_base = cbus_emac_base[ii];
 
 	priv->mdc_div = mdio_info->mdc_div;
-	if (!priv->mdc_div)
+	if (!priv->mdc_div) {
 		priv->mdc_div = 64;
 		dev_info(bus->parent, "%s: mdc_div: %d, phy_mask: %x\n",
 			 __func__, priv->mdc_div, bus->phy_mask);
+	}
 
 	mdio_node = of_get_child_by_name(pfe->dev->of_node, "mdio");
 	if ((mdio_info->id == 0) && mdio_node) {
@@ -1197,12 +1196,8 @@ static void ls1012a_configure_serdes(struct net_device *ndev)
 {
 	struct pfe_eth_priv_s *eth_priv = netdev_priv(ndev);
 	struct pfe_mdio_priv_s *mdio_priv = pfe->mdio.mdio_priv[eth_priv->id];
-	int sgmii_2500 = 0;
 	struct mii_bus *bus = mdio_priv->mii_bus;
 	u16 value = 0;
-
-	if (eth_priv->einfo->mii_config == PHY_INTERFACE_MODE_2500SGMII)
-		sgmii_2500 = 1;
 
 	netif_info(eth_priv, drv, ndev, "%s\n", __func__);
 	/* PCS configuration done with corresponding GEMAC */
@@ -1212,30 +1207,18 @@ static void ls1012a_configure_serdes(struct net_device *ndev)
 
 	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, SGMII_CR_RST);
 
-	if (sgmii_2500) {
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_IF_MODE, SGMII_SPEED_1GBPS
-							       | SGMII_EN);
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_DEV_ABIL_SGMII,
-				   SGMII_DEV_ABIL_ACK | SGMII_DEV_ABIL_SGMII);
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_L, 0xa120);
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_H, 0x7);
-		/* Autonegotiation need to be disabled for 2.5G SGMII mode*/
-		value = SGMII_CR_FD | SGMII_CR_SPEED_SEL1_1G;
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, value);
-	} else {
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_IF_MODE,
+	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_IF_MODE,
 				   SGMII_SPEED_1GBPS
 				   | SGMII_USE_SGMII_AN
 				   | SGMII_EN);
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_DEV_ABIL_SGMII,
+	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_DEV_ABIL_SGMII,
 				   SGMII_DEV_ABIL_EEE_CLK_STP_EN
 				   | 0xa0
 				   | SGMII_DEV_ABIL_SGMII);
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_L, 0x400);
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_H, 0x0);
-		value = SGMII_CR_AN_EN | SGMII_CR_FD | SGMII_CR_SPEED_SEL1_1G;
-		pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, value);
-	}
+	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_L, 0x400);
+	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_LINK_TMR_H, 0x0);
+	value = SGMII_CR_AN_EN | SGMII_CR_FD | SGMII_CR_SPEED_SEL1_1G;
+	pfe_eth_mdio_write(bus, 0, MDIO_SGMII_CR, value);
 }
 
 /*
@@ -1259,8 +1242,7 @@ static int pfe_phy_init(struct net_device *ndev)
 		 priv->einfo->phy_id);
 	netif_info(priv, drv, ndev, "%s: %s\n", __func__, phy_id);
 	interface = priv->einfo->mii_config;
-	if ((interface == PHY_INTERFACE_MODE_SGMII) ||
-	    (interface == PHY_INTERFACE_MODE_2500SGMII)) {
+	if (interface == PHY_INTERFACE_MODE_SGMII) {
 		/*Configure SGMII PCS */
 		if (pfe->scfg) {
 			/* Config MDIO from serdes */
@@ -1863,8 +1845,7 @@ static int pfe_eth_send_packet(struct sk_buff *skb, struct net_device *ndev)
  *
  */
 static u16 pfe_eth_select_queue(struct net_device *ndev, struct sk_buff *skb,
-				struct net_device *sb_dev,
-				select_queue_fallback_t fallback)
+				struct net_device *sb_dev)
 {
 	struct pfe_eth_priv_s *priv = netdev_priv(ndev);
 
@@ -1894,7 +1875,7 @@ static int pfe_eth_set_mac_address(struct net_device *ndev, void *addr)
 	if (!is_valid_ether_addr(sa->sa_data))
 		return -EADDRNOTAVAIL;
 
-	memcpy(ndev->dev_addr, sa->sa_data, ETH_ALEN);
+	eth_hw_addr_set(ndev, sa->sa_data);
 
 	gemac_set_laddrN(priv->EMAC_baseaddr,
 			 (struct pfe_mac_addr *)ndev->dev_addr, 1);
@@ -2361,7 +2342,7 @@ static int pfe_eth_init_one(struct pfe *pfe,
 	pfe_eth_fast_tx_timeout_init(priv);
 
 	/* Copy the station address into the dev structure, */
-	memcpy(ndev->dev_addr, einfo[id].mac_addr, ETH_ALEN);
+	eth_hw_addr_set(ndev, einfo[id].mac_addr);
 
 	if (us)
 		goto phy_init;
