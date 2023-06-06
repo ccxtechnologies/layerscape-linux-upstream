@@ -4799,6 +4799,9 @@ void nf_tables_deactivate_set(const struct nft_ctx *ctx, struct nft_set *set,
 {
 	switch (phase) {
 	case NFT_TRANS_PREPARE:
+		if (nft_set_is_anonymous(set))
+			nft_deactivate_next(ctx->net, set);
+
 		set->use--;
 		return;
 	case NFT_TRANS_ABORT:
